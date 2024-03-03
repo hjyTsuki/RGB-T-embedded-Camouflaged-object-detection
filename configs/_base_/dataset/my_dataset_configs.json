@@ -1,0 +1,81 @@
+{
+  "cod10k_camo_tr": {
+    "root": "D:\\Yang\\datasets\\Camouflage\\COD10K-v3\\COD10K-v3\\Train",
+    "image": {
+      "path": "Image",
+      "suffix": ".jpg"
+    },
+    "mask": {
+      "path": "GT_Object",
+      "suffix": ".png"
+    },
+    "edge": {
+      "path": "GT_Edge",
+      "suffix": ".png"
+    }
+  },
+  "cod10k_te": {
+      "root": "D:\\Yang\\datasets\\Camouflage\\COD10K-v3\\COD10K-v3\\Test",
+      "image": {
+          "path": "Image",
+          "suffix": ".jpg"
+      },
+      "mask": {
+          "path": "GT_Object",
+          "suffix": ".png"
+      },
+      "edge": {
+          "path": "GT_Edge",
+          "suffix": ".png"
+      }
+  },
+      "camo_tr": {
+          "root": "D:\\Yang\\datasets\\Camouflage\\CAMO-V.1.0\\CAMO-V.1.0-CVIU2019\\Train",
+          "image": {
+              "path": "Image",
+              "suffix": ".jpg"
+          },
+          "mask": {
+              "path": "GT_Object",
+              "suffix": ".png"
+          },
+          "edge": {
+              "path": "GT_Edge",
+              "suffix": ".png"
+          }
+      },
+      "camo_te": {
+          "root": "D:\\Yang\\datasets\\Camouflage\\CAMO-V.1.0\\CAMO-V.1.0-CVIU2019\\Images",
+          "image": {
+              "path": "Image",
+              "suffix": ".jpg"
+          },
+          "mask": {
+              "path": "GT_Object",
+              "suffix": ".png"
+          },
+          "edge": {
+              "path": "GT_Edge",
+              "suffix": ".png"
+          }
+      },
+    "vt1000": {
+          "root": "D:\\Yang\\datasets\\VT1000\\VT1000",
+          "image": {
+              "path": "RGB",
+              "suffix": ".jpg"
+          },
+          "mask": {
+              "path": "GT",
+              "suffix": ".jpg"
+          },
+        "thermal": {
+              "path": "T",
+              "suffix": ".jpg"
+          },
+          "edge": {
+              "path": "GT_Edge",
+              "suffix": ".png"
+          }
+      }
+  }
