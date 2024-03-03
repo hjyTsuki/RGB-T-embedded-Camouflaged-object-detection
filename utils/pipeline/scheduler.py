@@ -125,7 +125,8 @@ def get_scheduler_coef_func(mode, num_iters, cfg):
     if mode == "step":
         coef_func = get_step_coef_func(gamma=cfg["gamma"], milestones=cfg["milestones"])
     elif mode == "cos":
-        if half_cycle := cfg.get("half_cycle"):
+        half_cycle = cfg.get("half_cycle")
+        if half_cycle:
             half_cycle -= 1
         else:
             half_cycle = num_iters

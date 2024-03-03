@@ -39,3 +39,12 @@ def read_color_array(path: str):
     assert bgr_array is not None, f"Image Not Found: {path}"
     rgb_array = cv2.cvtColor(bgr_array, cv2.COLOR_BGR2RGB)
     return rgb_array
+
+
+def read_thermal_array(path: str):
+    # 暂时使用RGB读取
+    assert path.endswith(".jpg") or path.endswith(".png")
+    bgr_array = cv2.imread(path, cv2.IMREAD_COLOR)
+    assert bgr_array is not None, f"Image Not Found: {path}"
+    rgb_array = cv2.cvtColor(bgr_array, cv2.COLOR_BGR2RGB)
+    return rgb_array

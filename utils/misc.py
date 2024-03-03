@@ -52,11 +52,11 @@ def construct_path(output_dir: str, exp_name: str) -> dict:
     final_full_model_path = os.path.join(pth_path, "checkpoint_final.pth")
     final_state_path = os.path.join(pth_path, "state_final.pth")
 
-    tr_log_path = os.path.join(pth_log_path, f"tr_{str(datetime.now())[:10]}.txt")
-    te_log_path = os.path.join(pth_log_path, f"te_{str(datetime.now())[:10]}.txt")
-    trans_log_path = os.path.join(pth_log_path, f"trans_{str(datetime.now())[:10]}.txt")
-    cfg_copy_path = os.path.join(pth_log_path, f"cfg_{str(datetime.now())}.py")
-    trainer_copy_path = os.path.join(pth_log_path, f"trainer_{str(datetime.now())}.txt")
+    tr_log_path = os.path.join(pth_log_path, f"tr_{(str(datetime.now())[:10]).replace(':','')}.txt")
+    te_log_path = os.path.join(pth_log_path, f"te_{(str(datetime.now())[:10]).replace(':','')}.txt")
+    trans_log_path = os.path.join(pth_log_path, f"trans_{(str(datetime.now())[:10]).replace(':','')}.txt")
+    cfg_copy_path = os.path.join(pth_log_path, f"cfg_{str(str(datetime.now())).replace(':','')}.py")
+    trainer_copy_path = os.path.join(pth_log_path, f"trainer_{str(str(datetime.now())).replace(':','')}.txt")
     excel_path = os.path.join(pth_log_path, f"results.xlsx")
 
     path_config = {
@@ -116,7 +116,8 @@ def construct_exp_name(model_name: str, cfg: dict):
         # else: other types and values will be returned directly
         return _i
 
-    if (epoch_based := config.train.get("epoch_based", None)) is not None and (not epoch_based):
+    epoch_based = config.train.get("epoch_based", None)
+    if epoch_based is not None and (not epoch_based):
         focus_item.pop("train/num_epochs")
     else:
         # 默认基于epoch
@@ -321,8 +322,8 @@ def iterate_nested_sequence(nested_sequence):
 
 def get_value_recurse(keys: list, info: dict):
     curr_key, sub_keys = keys[0], keys[1:]
-
-    if (sub_info := info.get(curr_key, "NoKey")) == "NoKey":
+    sub_info = info.get(curr_key, "NoKey")
+    if sub_info == "NoKey":
         raise KeyError(f"{curr_key} must be contained in {info}")
 
     if sub_keys:

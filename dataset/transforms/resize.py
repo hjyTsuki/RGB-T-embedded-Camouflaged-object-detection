@@ -58,6 +58,15 @@ def ms_resize(img, scales, base_h=None, base_w=None, interpolation=cv2.INTER_LIN
     return [A.resize(img, height=int(h * s), width=int(w * s), interpolation=interpolation) for s in scales]
 
 
+def ts_resize(img, scales, base_h=None, base_w=None, interpolation=cv2.INTER_LINEAR):
+    if base_h is None and base_w is None:
+        h = img.shape[0]
+        w = img.shape[1]
+    else:
+        h = base_h
+        w = base_w
+    return A.resize(img, height=int(h * scales), width=int(w * scales), interpolation=interpolation)
+
 def ss_resize(img, scale, base_h=None, base_w=None, interpolation=cv2.INTER_LINEAR):
     if base_h is None and base_w is None:
         h = img.shape[0]

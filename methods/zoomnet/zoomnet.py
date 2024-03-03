@@ -172,19 +172,15 @@ def cal_ual(seg_logits, seg_gts):
 class ZoomNet(BasicModelClass):
     def __init__(self):
         super().__init__()
-        # E-Net
         self.shared_encoder = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
-        # C-Net
         self.translayer = TransLayer(out_c=64)  # [c5, c4, c3, c2, c1]
-        # 特征融合
         self.merge_layers = nn.ModuleList([SIU(in_dim=in_c) for in_c in (64, 64, 64, 64, 64)])
-        # decoder
+
         self.d5 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
         self.d4 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
         self.d3 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
         self.d2 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
         self.d1 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
-
         self.out_layer_00 = ConvBNReLU(64, 32, 3, 1, 1)
         self.out_layer_01 = nn.Conv2d(32, 1, 1)
 
@@ -217,7 +213,7 @@ class ZoomNet(BasicModelClass):
         return dict(seg=logits)
 
     def train_forward(self, data, **kwargs):
-        assert not {"image1.5", "image1.0", "image0.5", "mask"}.difference(set(data)), set(data)
+        # assert not {"image1.5", "image1.0", "image0.5", "mask"}.difference(set(data)), set(data)
 
         output = self.body(
             l_scale=data["image1.5"],

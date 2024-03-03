@@ -246,32 +246,32 @@
     }
   },
   "cod10k_camo_tr": {
-    "root": "/home/lart/Datasets/Saliency/COD/Train/COD10K_CAMO",
+    "root": "D:\\Yang\\datasets\\COD10K-v3\\COD10K-v3\\Train",
     "image": {
       "path": "Image",
       "suffix": ".jpg"
     },
     "mask": {
-      "path": "Mask",
+      "path": "GT_Object",
       "suffix": ".png"
     },
     "edge": {
-      "path": "Edge",
+      "path": "GT_Edge",
       "suffix": ".png"
     }
   },
   "camo_te": {
-    "root": "/home/lart/Datasets/Saliency/COD/Test/CAMO",
+    "root": "D:\\Yang\\datasets\\COD10K-v3\\COD10K-v3\\Test",
     "image": {
       "path": "Image",
       "suffix": ".jpg"
     },
     "mask": {
-      "path": "Mask",
+      "path": "GT_Object",
       "suffix": ".png"
     },
     "edge": {
-      "path": "Edge",
+      "path": "GT_Edge",
       "suffix": ".png"
     }
   },
@@ -291,7 +291,7 @@
     }
   },
   "cpd1k_te": {
-    "root": "/home/lart/Datasets/Saliency/COD/CPD/CPD1K-TE",
+    "root": "D:\\Yang\\datasets\\COD10K-v3\\COD10K-v3\\Test",
     "image": {
       "path": "Image",
       "suffix": ".jpg"

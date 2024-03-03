@@ -71,8 +71,9 @@ def get_datasets_info_with_keys(dataset_infos: list, extra_keys: list) -> dict:
             assert k in dataset_info, f"{k} is not in {dataset_info}"
             infos[k] = dict(dir=os.path.join(dataset_root, dataset_info[k]["path"]), ext=dataset_info[k]["suffix"])
 
-        if (index_file_path := dataset_info.get("index_file", None)) is not None:
-            image_names = get_data_from_txt(index_file_path)
+        index_file_path = dataset_info.get("index_file", None)
+        if index_file_path is not None:
+            image_names = get_data_from_txt(dataset_info['index_file_path'])
         else:
             image_names = get_name_list_from_dir(infos["image"]["dir"])
 
