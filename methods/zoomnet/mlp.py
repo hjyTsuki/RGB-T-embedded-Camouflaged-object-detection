@@ -6,6 +6,7 @@ from torch.nn import functional as F
 hidden_list = [256, 256, 256]
 L = 4
 
+
 def make_coord(shape, ranges=None, flatten=True):
     coord_seqs = []
     for i, n in enumerate(shape):
