@@ -7,6 +7,7 @@ from torch.utils.checkpoint import checkpoint
 
 from methods.module.base_model import BasicModelClass
 from methods.module.conv_block import ConvBNReLU
+from methods.zoomnet.mlp import INR
 from utils.builder import MODELS
 from utils.ops import cus_sample
 
@@ -91,6 +92,104 @@ class SIU(nn.Module):
         return lms
 
 
+class TRFusion(nn.Module):
+    def __init__(self, in_dim):
+        super(TRFusion, self).__init__()
+        self.rgbSampling = ConvBNReLU(in_dim, in_dim, 3, stride=1, padding=1)
+        self.thermalSampling = ConvBNReLU(in_dim, in_dim, 3, stride=1, padding=1)
+
+    def forward(self, rgb_feat, thermal_feat):
+        r_feat = self.rgbSampling(rgb_feat)
+        t_feat = self.thermalSampling(thermal_feat)
+        return rgb_feat*r_feat + t_feat*thermal_feat
+
+class InvertedResidualBlock(nn.Module):
+    def __init__(self, inp, oup, expand_ratio):
+        super(InvertedResidualBlock, self).__init__()
+        hidden_dim = int(inp // expand_ratio)
+        self.bottleneckBlock = nn.Sequential(
+            # pw
+            nn.Conv2d(inp, hidden_dim, 1, bias=False),
+            # nn.BatchNorm2d(hidden_dim),
+            nn.ReLU6(inplace=True),
+            # dw
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(hidden_dim, hidden_dim, 3, groups=hidden_dim, bias=False),
+            # nn.BatchNorm2d(hidden_dim),
+            nn.ReLU6(inplace=True),
+            # pw-linear
+            nn.Conv2d(hidden_dim, oup, 1, bias=False),
+            # nn.BatchNorm2d(oup),
+        )
+
+    def forward(self, x):
+        return self.bottleneckBlock(x)
+
+
+class DetailNode(nn.Module):
+    def __init__(self,
+                 inp_dim,
+                 out_dim
+                 ):
+        super(DetailNode, self).__init__()
+        # Scale is Ax + b, i.e. affine transformation
+        self.theta_phi = InvertedResidualBlock(inp=inp_dim * 2, oup=inp_dim, expand_ratio=2)
+        self.theta_rho = InvertedResidualBlock(inp=inp_dim, oup=out_dim, expand_ratio=2)
+        # self.theta_eta = InvertedResidualBlock(inp=inp_dim, oup=out_dim, expand_ratio=2)
+
+    def forward(self, xr, xt):
+        x = torch.cat([xr, xt], dim=1)
+        x = self.theta_phi(x)
+        x = self.theta_rho(x)
+        # x = self.theta_eta(x)
+        return x
+
+
+def normalize_to_range(x, new_min=-5, new_max=5):
+    # 找到数组的最大值和最小值
+    max_val = torch.max(x)
+    min_val = torch.min(x)
+
+    # 计算原始范围
+    range_val = max_val - min_val
+
+    # 避免除以0的情况
+    if range_val == 0:
+        return x
+
+    # 进行归一化
+    normalized = (x - min_val) / range_val
+
+    # 缩放到新的范围
+    normalized = new_min + (normalized * (new_max - new_min))
+
+    return normalized
+
+class DynamicFusion(nn.Module):
+    def __init__(self,
+                 inp_chanel,
+                 feature_levels=5,
+                 ):
+        super(DynamicFusion, self).__init__()
+        self.feature_levels = feature_levels
+        for i in range(feature_levels):
+            setattr(self, f'fusion_stage{i}', DetailNode(inp_chanel, 1))
+            setattr(self, f'INR{i}', INR(1).cuda())
+
+    def forward(self, rgb_feature_list, thermal_feature_list):
+        fused_list = []
+        for i in range(self.feature_levels):
+            xr = rgb_feature_list[i]
+            xt = thermal_feature_list[i]
+            gate = getattr(self, f'fusion_stage{i}')
+            dynamic = (gate(xr, xt))
+            INR_Trans = getattr(self, f'INR{i}')
+            dynamic = (normalize_to_range(dynamic + INR_Trans(dynamic))).sigmoid()
+            fused = xr * dynamic + xt * (1 - dynamic)
+            fused_list.append(fused)
+        return fused_list
+
+
 class HMU(nn.Module):
     def __init__(self, in_c, num_groups=4, hidden_dim=None):
         super().__init__()
@@ -172,9 +271,25 @@ def cal_ual(seg_logits, seg_gts):
 class ZoomNet(BasicModelClass):
     def __init__(self):
         super().__init__()
-        self.shared_encoder = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+        encoder1 = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+        encoder2 = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+        self.encoder_shared_level1 = nn.Sequential(encoder1.conv1, encoder1.bn1, encoder1.act1)
+        self.encoder_shared_level2 = nn.Sequential(encoder1.maxpool, encoder1.layer1)
+        self.encoder_rgb_private_level3 = encoder1.layer2
+        self.encoder_rgb_private_level4 = encoder1.layer3
+        self.encoder_rgb_private_level5 = encoder1.layer4
+        self.encoder_thermal_private_level3 = encoder2.layer2
+        self.encoder_thermal_private_level4 = encoder2.layer3
+        self.encoder_thermal_private_level5 = encoder2.layer4
+
+        # self.shared_encoder = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+        # self.thermal_encoder = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
         self.translayer = TransLayer(out_c=64)  # [c5, c4, c3, c2, c1]
+        self.t_translayer = TransLayer(out_c=64)
         self.merge_layers = nn.ModuleList([SIU(in_dim=in_c) for in_c in (64, 64, 64, 64, 64)])
+
+        # self.fusion_layer = nn.ModuleList([TRFusion(in_dim=in_c) for in_c in (64, 64, 64, 64, 64)])
+        self.fusion_layer = DynamicFusion(64, 5)
 
         self.d5 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
         self.d4 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
@@ -185,19 +300,58 @@ class ZoomNet(BasicModelClass):
         self.out_layer_01 = nn.Conv2d(32, 1, 1)
 
     def encoder_translayer(self, x):
-        en_feats = self.shared_encoder(x)
+        # en_feats = self.shared_encoder(x)
+        en_feats = []
+        f1 = self.encoder_shared_level1(x)
+        en_feats.append(f1)
+        f2 = self.encoder_shared_level2(f1)
+        en_feats.append(f2)
+        f3 = self.encoder_rgb_private_level3(f2)
+        en_feats.append(f3)
+        f4 = self.encoder_rgb_private_level4(f3)
+        en_feats.append(f4)
+        f5 = self.encoder_rgb_private_level5(f4)
+        en_feats.append(f5)
+
         trans_feats = self.translayer(en_feats)
         return trans_feats
 
-    def body(self, l_scale, m_scale, s_scale):
+    def t_encoder_translayer(self, x):
+        # en_feats = self.thermal_encoder(x)
+
+        en_feats = []
+        f1 = self.encoder_shared_level1(x)
+        en_feats.append(f1)
+        f2 = self.encoder_shared_level2(f1)
+        en_feats.append(f2)
+        f3 = self.encoder_thermal_private_level3(f2)
+        en_feats.append(f3)
+        f4 = self.encoder_thermal_private_level4(f3)
+        en_feats.append(f4)
+        f5 = self.encoder_thermal_private_level5(f4)
+        en_feats.append(f5)
+
+        trans_feats = self.t_translayer(en_feats)
+        return trans_feats
+
+    def body(self, l_scale, m_scale, s_scale, thermal):
         l_trans_feats = self.encoder_translayer(l_scale)
         m_trans_feats = self.encoder_translayer(m_scale)
         s_trans_feats = self.encoder_translayer(s_scale)
+
+        t_trans_feats = self.t_encoder_translayer(thermal)
 
         feats = []
         for l, m, s, layer in zip(l_trans_feats, m_trans_feats, s_trans_feats, self.merge_layers):
             siu_outs = layer(l=l, m=m, s=s)
             feats.append(siu_outs)
+
+        # for r, t, layer in zip(feats, t_trans_feats, self.fusion_layer):
+        #     fusion_outs = layer(r, t)
+        #     feats.append(fusion_outs)
+
+        fusion_list = self.fusion_layer(feats, t_trans_feats)
+        feats = fusion_list
 
         x = self.d5(feats[0])
         x = cus_sample(x, mode="scale", factors=2)
@@ -210,6 +364,9 @@ class ZoomNet(BasicModelClass):
         x = self.d1(x + feats[4])
         x = cus_sample(x, mode="scale", factors=2)
         logits = self.out_layer_01(self.out_layer_00(x))
+
+
+
         return dict(seg=logits)
 
     def train_forward(self, data, **kwargs):
@@ -219,6 +376,7 @@ class ZoomNet(BasicModelClass):
             l_scale=data["image1.5"],
             m_scale=data["image1.0"],
             s_scale=data["image0.5"],
+            thermal=data["thermal"]
         )
         loss, loss_str = self.cal_loss(
             all_preds=output,
@@ -232,6 +390,7 @@ class ZoomNet(BasicModelClass):
             l_scale=data["image1.5"],
             m_scale=data["image1.0"],
             s_scale=data["image0.5"],
+            thermal=data["thermal"]
         )
         return output["seg"]
 
@@ -258,6 +417,8 @@ class ZoomNet(BasicModelClass):
         param_groups = {}
         for name, param in self.named_parameters():
             if name.startswith("shared_encoder.layer"):
+                param_groups.setdefault("pretrained", []).append(param)
+            elif name.startswith("encoder"):
                 param_groups.setdefault("pretrained", []).append(param)
             elif name.startswith("shared_encoder."):
                 param_groups.setdefault("fixed", []).append(param)
