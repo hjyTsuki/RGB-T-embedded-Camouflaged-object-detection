@@ -6,7 +6,6 @@ from torch.nn import functional as F
 hidden_list = [256, 256, 256]
 L = 4
 
-
 def make_coord(shape, ranges=None, flatten=True):
     coord_seqs = []
     for i, n in enumerate(shape):
@@ -49,11 +48,11 @@ class INR(nn.Module):
 
         if self.feat_unfold:
             imnet_in_dim *= 9
-        imnet_in_dim += 2 + 4 * L  
+        imnet_in_dim += 2 + 4 * L
         if self.cell_decode:
             imnet_in_dim += 2
 
-        self.imnet = MLP(imnet_in_dim, 1, hidden_list)
+        self.imnet = MLP(imnet_in_dim, 2, hidden_list)
 
     def query_rgb(self, inp, coord, cell=None):
         feat = inp
@@ -91,7 +90,7 @@ class INR(nn.Module):
                 q_coord = feat_coord.view(bs, q, -1).permute(0, 2, 1)
 
                 points_enc = self.positional_encoding(q_coord, L=L)
-                q_coord = torch.cat([q_coord, points_enc], dim=-1)  
+                q_coord = torch.cat([q_coord, points_enc], dim=-1)
 
                 rel_coord = coord - q_coord
                 rel_coord[:, :, 0] *= feat.shape[-2]
@@ -139,16 +138,16 @@ class INR(nn.Module):
         cell = cell.unsqueeze(0).repeat(B, 1, 1)
         coord = coord.unsqueeze(0).repeat(B, 1, 1)
         points_enc = self.positional_encoding(coord, L=L)
-        coord = torch.cat([coord, points_enc], dim=-1)  
+        coord = torch.cat([coord, points_enc], dim=-1)
 
         return self.query_rgb(inp, coord, cell)
 
-    def positional_encoding(self, input, L): 
+    def positional_encoding(self, input, L):
         shape = input.shape
-        freq = 2 ** torch.arange(L, dtype=torch.float32).cuda() * np.pi  
-        spectrum = input[..., None] * freq  
-        sin, cos = spectrum.sin(), spectrum.cos()  
-        input_enc = torch.stack([sin, cos], dim=-2)  
-        input_enc = input_enc.view(*shape[:-1], -1)  
+        freq = 2 ** torch.arange(L, dtype=torch.float32).cuda() * np.pi
+        spectrum = input[..., None] * freq
+        sin, cos = spectrum.sin(), spectrum.cos()
+        input_enc = torch.stack([sin, cos], dim=-2)
+        input_enc = input_enc.view(*shape[:-1], -1)
 
         return input_enc

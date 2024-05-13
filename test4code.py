@@ -65,5 +65,10 @@ ans = encoder1(x)
 x1 = encoder_shared_level1(x)
 print(ans)
 
+device_ids = [i for i in range(torch.cuda.device_count())]
+if torch.cuda.device_count() > 1:
+    print("\n\nLet's use", torch.cuda.device_count(), "GPUs!\n\n")
 
+    if len(device_ids) > 1:
+        model = nn.DataParallel(model, device_ids=device_ids)
 

@@ -110,12 +110,12 @@ class InvertedResidualBlock(nn.Module):
         self.bottleneckBlock = nn.Sequential(
             # pw
             nn.Conv2d(inp, hidden_dim, 1, bias=False),
-            # nn.BatchNorm2d(hidden_dim),
+            nn.BatchNorm2d(hidden_dim),
             nn.ReLU6(inplace=True),
             # dw
             nn.ReflectionPad2d(1),
             nn.Conv2d(hidden_dim, hidden_dim, 3, groups=hidden_dim, bias=False),
-            # nn.BatchNorm2d(hidden_dim),
+            nn.BatchNorm2d(hidden_dim),
             nn.ReLU6(inplace=True),
             # pw-linear
             nn.Conv2d(hidden_dim, oup, 1, bias=False),
@@ -161,43 +161,6 @@ def save_weight(tensor_data, time):
     with open(output_file_path, 'a') as file:
         file.write(time + '\n' + data_string)
 
-class DynamicFusion(nn.Module):
-    def __init__(self,
-                 inp_chanel,
-                 feature_levels=5,
-                 ):
-        super(DynamicFusion, self).__init__()
-        self.feature_levels = feature_levels
-        self.loss_Func = nn.L1Loss()
-        for i in range(feature_levels):
-            setattr(self, f'fusion_stage{i}', DetailNode(inp_chanel, 1))
-            setattr(self, f'INR{i}', INR(2).cuda())
-
-    def forward(self, rgb_feature_list, thermal_feature_list, INR_training=False):
-        fused_list = []
-        loss_NR = 0
-        for i in range(self.feature_levels):
-            xr = rgb_feature_list[i]
-            xt = thermal_feature_list[i]
-            gate = getattr(self, f'fusion_stage{i}')
-            dynamic = (gate(xr, xt))
-            # INR_Trans = getattr(self, f'INR{i}')
-            # dynamic_NR = INR_Trans(dynamic)
-            # if INR_training:
-                # loss_NR += self.loss_Func(dynamic, dynamic_NR)
-            dynamic_NR = dynamic.chunk(2, dim=1)
-            dynamic_xr = (torch.abs(dynamic_NR[0]) + 1e-30) / (torch.abs(dynamic_NR[0]) + torch.abs(dynamic_NR[1]) + 1e-30)
-            dynamic_xt = (torch.abs(dynamic_NR[1]) + 1e-30) / (torch.abs(dynamic_NR[0]) + torch.abs(dynamic_NR[1]) + 1e-30)
-            fused = xr * dynamic_xr + xt * dynamic_xt
-            fused_list.append(fused)
-        return fused_list, loss_NR
-
-    def get_grouped_params(self):
-        param_groups = {}
-        for name, param in self.named_parameters():
-            if name.startswith("INR"):
-                param_groups.setdefault("retrained", []).append(param)
-        return param_groups
 
 
 class HMU(nn.Module):
@@ -278,7 +241,7 @@ def cal_ual(seg_logits, seg_gts):
 
 
 @MODELS.register()
-class ZoomNet(BasicModelClass):
+class CMMF(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
@@ -293,14 +256,14 @@ class ZoomNet(BasicModelClass):
         self.encoder_thermal_private_level4 = encoder2.layer3
         self.encoder_thermal_private_level5 = encoder2.layer4
 
-        # self.shared_encoder = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
-        # self.thermal_encoder = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
         self.translayer = TransLayer(out_c=64)  # [c5, c4, c3, c2, c1]
         self.t_translayer = TransLayer(out_c=64)
         self.merge_layers = nn.ModuleList([SIU(in_dim=in_c) for in_c in (64, 64, 64, 64, 64)])
 
-        # self.fusion_layer = nn.ModuleList([TRFusion(in_dim=in_c) for in_c in (64, 64, 64, 64, 64)])
-        self.fusion_layer = DynamicFusion(64, 5)
+        self.loss_Func = nn.L1Loss()
+        for i in range(5):
+            setattr(self, f'fusion_stage{i}', DetailNode(64, 1))
+            setattr(self, f'INR{i}', INR(2).cuda())
 
         self.d5 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
         self.d4 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
@@ -361,8 +324,33 @@ class ZoomNet(BasicModelClass):
         #     fusion_outs = layer(r, t)
         #     feats.append(fusion_outs)
 
-        fusion_list, loss_NR = self.fusion_layer(feats, t_trans_feats, self.INR_train)
-        feats = fusion_list
+        fused_list = []
+        loss_NR = torch.Tensor([0.0]).cuda()
+        for i in range(len(feats)):
+            xr = feats[i]
+            xt = t_trans_feats[i]
+            gate = getattr(self, f'fusion_stage{i}')
+            dynamic = (gate(xr, xt))
+
+            if self.INR_train:
+                INR_Trans = getattr(self, f'INR{i}')
+                dynamic_NR = INR_Trans(dynamic)
+                loss_NR += self.loss_Func(dynamic, dynamic_NR)
+                dynamic_NR = dynamic_NR.chunk(2, dim=1)
+                dynamic_xr = (torch.abs(dynamic_NR[0]) + 1e-30) / (
+                        torch.abs(dynamic_NR[0]) + torch.abs(dynamic_NR[1]) + 1e-30)
+                dynamic_xt = (torch.abs(dynamic_NR[1]) + 1e-30) / (
+                        torch.abs(dynamic_NR[0]) + torch.abs(dynamic_NR[1]) + 1e-30)
+            else:
+                dynamic = dynamic.chunk(2, dim=1)
+                dynamic_xr = (torch.abs(dynamic[0]) + 1e-30) / (
+                    torch.abs(dynamic[0]) + torch.abs(dynamic[1]) + 1e-30)
+                dynamic_xt = (torch.abs(dynamic[1]) + 1e-30) / (
+                    torch.abs(dynamic[0]) + torch.abs(dynamic[1]) + 1e-30)
+            fused = xr * dynamic_xr + xt * dynamic_xt
+            fused_list.append(fused)
+
+        feats = fused_list
 
         x = self.d5(feats[0])
         x = cus_sample(x, mode="scale", factors=2)
@@ -375,7 +363,6 @@ class ZoomNet(BasicModelClass):
         x = self.d1(x + feats[4])
         x = cus_sample(x, mode="scale", factors=2)
         logits = self.out_layer_01(self.out_layer_00(x))
-
 
 
         return dict(seg=logits), loss_NR
@@ -424,7 +411,7 @@ class ZoomNet(BasicModelClass):
             losses.append(ual_loss)
             loss_str.append(f"{name}_UAL_{ual_coef:.5f}: {ual_loss.item():.5f}")
         losses.append(loss_NR)
-        loss_str.append(f"loss_NR: {loss_NR:.5f}")
+        loss_str.append(f"loss_NR: {loss_NR.item():.5f}")
         return sum(losses), " ".join(loss_str)
 
     def get_grouped_params(self):
@@ -440,48 +427,16 @@ class ZoomNet(BasicModelClass):
                 param_groups.setdefault("retrained", []).append(param)
         return param_groups
 
+    def get_grouped_INR_params(self):
+        param_groups = {}
+        for name, param in self.named_parameters():
+            if name.startswith("d"):
+                param_groups.setdefault("retrained", []).append(param)
+            elif name.startswith("INR"):
+                param_groups.setdefault("retrained", []).append(param)
+            elif name.startswith("logits."):
+                param_groups.setdefault("retrained", []).append(param)
+            else:
+                param_groups.setdefault("fixd", []).append(param)
+        return param_groups
 
-@MODELS.register()
-class ZoomNet_CK(ZoomNet):
-    def __init__(self):
-        super().__init__()
-        self.dummy = torch.ones(1, dtype=torch.float32, requires_grad=True)
-
-    def encoder(self, x, dummy_arg=None):
-        assert dummy_arg is not None
-        x0, x1, x2, x3, x4 = self.shared_encoder(x)
-        return x0, x1, x2, x3, x4
-
-    def trans(self, x0, x1, x2, x3, x4):
-        x5, x4, x3, x2, x1 = self.translayer([x0, x1, x2, x3, x4])
-        return x5, x4, x3, x2, x1
-
-    def decoder(self, x5, x4, x3, x2, x1):
-        x = self.d5(x5)
-        x = cus_sample(x, mode="scale", factors=2)
-        x = self.d4(x + x4)
-        x = cus_sample(x, mode="scale", factors=2)
-        x = self.d3(x + x3)
-        x = cus_sample(x, mode="scale", factors=2)
-        x = self.d2(x + x2)
-        x = cus_sample(x, mode="scale", factors=2)
-        x = self.d1(x + x1)
-        x = cus_sample(x, mode="scale", factors=2)
-        logits = self.out_layer_01(self.out_layer_00(x))
-        return logits
-
-    def body(self, l_scale, m_scale, s_scale):
-        l_trans_feats = checkpoint(self.encoder, l_scale, self.dummy)
-        m_trans_feats = checkpoint(self.encoder, m_scale, self.dummy)
-        s_trans_feats = checkpoint(self.encoder, s_scale, self.dummy)
-        l_trans_feats = checkpoint(self.trans, *l_trans_feats)
-        m_trans_feats = checkpoint(self.trans, *m_trans_feats)
-        s_trans_feats = checkpoint(self.trans, *s_trans_feats)
-
-        feats = []
-        for layer_idx, (l, m, s) in enumerate(zip(l_trans_feats, m_trans_feats, s_trans_feats)):
-            siu_outs = checkpoint(self.merge_layers[layer_idx], l, m, s)
-            feats.append(siu_outs)
-
-        logits = checkpoint(self.decoder, *feats)
-        return dict(seg=logits)

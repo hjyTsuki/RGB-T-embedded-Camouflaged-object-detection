@@ -13,7 +13,9 @@ from torch import nn
 from tqdm import tqdm
 
 from utils import builder, configurator, io, misc, ops, pipeline, recorder
-
+device_ids = [i for i in range(torch.cuda.device_count())]
+if torch.cuda.device_count() > 1:
+    print("\n\nLet's use", torch.cuda.device_count(), "GPUs!\n\n")
 
 def parse_config():
     parser = argparse.ArgumentParser("Training and evaluation script")
@@ -138,7 +140,8 @@ def training(model, cfg) -> pipeline.ModelEma:
     if not cfg.train.epoch_based:
         cfg.train.num_epochs = (cfg.train.num_iters + cfg.epoch_length) // cfg.epoch_length
     else:
-        cfg.train.num_iters = (cfg.train.num_epochs) * cfg.epoch_length
+        cfg.train.num_iters = cfg.train.num_epochs * cfg.epoch_length
+        cfg.train.num_INR_iters = cfg.train.num_INR_epochs * cfg.epoch_length
 
     optimizer = pipeline.construct_optimizer(
         model=model,
@@ -292,6 +295,132 @@ def training(model, cfg) -> pipeline.ModelEma:
         if curr_iter >= cfg.train.num_iters:
             break
 
+
+    optimizer = pipeline.construct_optimizer(
+        model=model,
+        initial_lr=cfg.train.lr,
+        mode=cfg.train.optimizer.mode,
+        group_mode="INR",
+        cfg=cfg.train.optimizer.cfg,
+    )
+    scheduler = pipeline.Scheduler(
+        optimizer=optimizer,
+        num_iters=cfg.train.num_iters,
+        epoch_length=cfg.epoch_length,
+        scheduler_cfg=cfg.train.scheduler,
+        step_by_batch=cfg.train.sche_usebatch,
+    )
+    scheduler.record_lrs(param_groups=optimizer.param_groups)
+    scaler = torch.cuda.amp.GradScaler(enabled=cfg.train.use_amp)
+
+    cfg.tr_logger.record(f"Scheduler:\n{scheduler}")
+    cfg.tr_logger.record(f"Optimizer:\n{optimizer}")
+    # scheduler.plot_lr_coef_curve(save_path=cfg.path.pth_log)
+
+    curr_iter = 0
+    for curr_epoch in range(0, cfg.train.num_INR_epochs):
+        cfg.tr_logger.record(f"Exp_Name: {cfg.exp_name}")
+        time_logger.start(msg="An Epoch Start...")
+
+        loss_recorder.reset()
+        model.train()
+        model.is_training = True
+        model.INR_train = True
+        # an epoch starts
+        for batch_idx, batch in enumerate(tr_loader):
+            scheduler.step(curr_idx=curr_iter)  # update learning rate
+
+            batch_data = misc.to_device(data=batch["data"], device=model.device)
+            with torch.cuda.amp.autocast(enabled=cfg.train.use_amp):
+                probs, loss, loss_str = model(
+                    data=batch_data,
+                    curr=dict(
+                        iter_percentage=curr_iter / cfg.train.num_INR_iters,
+                        epoch_percentage=curr_epoch / cfg.train.num_INR_epochs,
+                    ),
+                )
+                loss = loss / cfg.train.grad_acc_step
+
+            scaler.scale(loss).backward()
+
+            if cfg.train.grad_clip.enable:
+                scaler.unscale_(optimizer)
+                ops.clip_grad(
+                    chain(*[group["params"] for group in optimizer.param_groups]),
+                    mode=cfg.train.grad_clip.mode,
+                    clip_cfg=cfg.train.grad_clip.cfg,
+                )
+
+            # Accumulates scaled gradients.
+            if (curr_iter + 1) % cfg.train.grad_acc_step == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=cfg.train.optimizer.set_to_none)
+
+                if model_ema is not None:
+                    model_ema.update(model)
+
+            item_loss = loss.item()
+            data_shape = batch_data["mask"].shape
+            loss_recorder.update(value=item_loss, num=data_shape[0])
+
+            if cfg.log_interval.txt > 0 and (
+                curr_iter % cfg.log_interval.txt == 0
+                or (curr_iter + 1) % cfg.epoch_length == 0
+                or (curr_iter + 1) == cfg.train.num_iters
+            ):
+                msg = " | ".join(
+                    [
+                        f"I:{curr_iter}:{cfg.train.num_INR_iters} {batch_idx}/{cfg.epoch_length} {curr_epoch}/{cfg.train.num_INR_epochs}",
+                        f"Lr:{optimizer.lr_string()}",
+                        f"M:{loss_recorder.avg:.5f}/C:{item_loss:.5f}",
+                        f"{list(data_shape)}",
+                        f"{loss_str}",
+                    ]
+                )
+                cfg.tr_logger.record(msg)
+
+            if cfg.log_interval.tensorboard > 0 and (
+                curr_iter % cfg.log_interval.tensorboard == 0
+                or (curr_iter + 1) % cfg.epoch_length == 0
+                or (curr_iter + 1) == cfg.train.num_iters
+            ):
+                cfg.tb_logger.record_curve("iter_loss", item_loss, curr_iter)
+                cfg.tb_logger.record_curve("lr", optimizer.lr_groups(), curr_iter)
+                cfg.tb_logger.record_curve("avg_loss", loss_recorder.avg, curr_iter)
+                cfg.tb_logger.record_images(dict(**probs, **batch_data), curr_iter)
+
+            if curr_iter < 3:  # plot some batches of the training phase
+                recorder.plot_results(
+                    dict(**probs, **batch_data),
+                    save_path=os.path.join(cfg.path.pth_log, f"train_batch_{curr_iter}.png"),
+                )
+
+            curr_iter += 1
+            if curr_iter >= cfg.train.num_INR_iters:
+                break
+        # an epoch ends
+
+        if curr_epoch == 0 and model_ema is not None:
+            model_ema.set(model=model)  # using a better initial model state
+
+        # save all params for (curr_epoch+1)th epoch
+        io.save_params(
+            exp_name=cfg.exp_name,
+            model=model,
+            model_ema=model_ema,
+            optimizer=optimizer,
+            scaler=scaler,
+            next_epoch=curr_epoch + 1,
+            total_epoch=cfg.train.num_epochs,
+            save_num_models=cfg.train.save_num_models,
+            full_net_path=cfg.path.final_full_net,
+            state_net_path=cfg.path.final_state_net,
+        )
+        time_logger.now(pre_msg="An Epoch End...")
+
+        if curr_iter >= cfg.train.num_INR_iters:
+            break
     # only save the last weight
     io.save_weight(model=model, save_path=cfg.path.final_state_net)
     return model_ema
@@ -334,6 +463,8 @@ def main():
 
     model.device = "cuda:0"
     model.to(model.device)
+    if len(device_ids) > 1:
+        model = nn.DataParallel(model, device_ids=device_ids)
 
     if cfg.load_from:
         model_ema = io.load_weight(model=model, load_path=cfg.load_from)

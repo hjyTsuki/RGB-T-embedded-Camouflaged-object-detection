@@ -7,13 +7,15 @@ _base_ = [
 has_test = True
 deterministic = True
 use_custom_worker_init = False
-model_name = "ZoomNet"
+# model_name = "ZoomNet"
+model_name = "CMMF"
 
 train = dict(
     batch_size=8,
     num_workers=4,
     use_amp=True,
-    num_epochs=80,
+    num_epochs=50,
+    num_INR_epochs=20,
     epoch_based=True,
     lr=0.05,
     optimizer=dict(

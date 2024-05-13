@@ -193,7 +193,7 @@ class Scheduler:
         self.step_by_batch = step_by_batch
 
         self.scheduler_cfg = copy.deepcopy(scheduler_cfg)
-        self.mode = scheduler_cfg.pop("mode")
+        self.mode = scheduler_cfg.get("mode")
         if self.mode not in self.supported_scheduler_modes:
             raise NotImplementedError(
                 f"{self.mode} is not implemented. " f"Has been supported: {self.supported_scheduler_modes}"

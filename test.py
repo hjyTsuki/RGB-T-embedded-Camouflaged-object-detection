@@ -18,7 +18,7 @@ def parse_config():
     parser.add_argument("--datasets-info", default="./configs/_base_/dataset/my_dataset_configs.json", type=str)
     parser.add_argument("--model-name", type=str)
     parser.add_argument("--batch-size", type=int)
-    parser.add_argument("--load-from", type=str, default='output/ZoomNet_BS8_LR0.05_E70_H384_W384_OPMsgd_OPGMfinetune_SCf3_AMP/pth/state_final.pth')
+    parser.add_argument("--load-from", type=str, default='output\CMMF_BS8_LR0.05_E50_H384_W384_OPMsgd_OPGMfinetune_SCf3_AMP\pth\state_final.pth')
     parser.add_argument("--save-path", type=str, default='./output/ForSharing/SOD_VT5000_Results')
     parser.add_argument("--minmax-results", action="store_true")
     parser.add_argument("--info", type=str)
@@ -70,6 +70,7 @@ def test_once(
     to_minmax=False,
 ):
     model.is_training = False
+    model.INR_train = True
     cal_total_seg_metrics = recorder.CalTotalMetric()
 
     pgr_bar = enumerate(data_loader)
@@ -138,7 +139,7 @@ def main():
     model.device = "cuda:0"
     model.to(model.device)
     model.eval()
-
+    model.INR_train = True
     testing(model=model, cfg=cfg)
 
 
