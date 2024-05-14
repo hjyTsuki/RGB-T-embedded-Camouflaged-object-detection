@@ -269,15 +269,16 @@ class CMMF(BasicModelClass):
             setattr(self, f'fusion_stage{i}', DetailNode((96 * (2 ** i)), 1))
             setattr(self, f'INR{i}', INR(2).cuda())
 
-        self.d4 = nn.Sequential(HMU((96 * (2 ** 0)), num_groups=6, hidden_dim=48))
-        self.upsample_level3 = Upsample(96 * (2 ** 1))
-        self.d3 = nn.Sequential(HMU((96 * (2 ** 1)), num_groups=6, hidden_dim=(96 * (2 ** 0))))
+        dim = 96
+        self.d1 = nn.Sequential(HMU((dim * (2 ** 0)), num_groups=4, hidden_dim=48))
+        self.upsample_level3 = Upsample(dim * (2 ** 1))
+        self.d2 = nn.Sequential(HMU((dim * (2 ** 1)), num_groups=4, hidden_dim=(dim * (2 ** 0))))
         self.upsample_level2 = Upsample(96 * (2 ** 2))
-        self.d2 = nn.Sequential(HMU((96 * (2 ** 2)), num_groups=6, hidden_dim=(96 * (2 ** 1))))
+        self.d3 = nn.Sequential(HMU((dim * (2 ** 2)), num_groups=4, hidden_dim=(dim * (2 ** 1))))
         self.upsample_level1 = Upsample(96 * (2 ** 3))
-        self.d1 = nn.Sequential(HMU((96 * (2 ** 3)), num_groups=6, hidden_dim=(96 * (2 ** 2))))
-
-        self.output_max = nn.Conv2d(int(96 * 1 ** 0), 1, kernel_size=3, stride=1, padding=1, bias=False)
+        self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=4, hidden_dim=(dim * (2 ** 2))))
+        self.output_max_context1 = nn.Conv2d(int(dim * 1 ** 1), 96, kernel_size=3, stride=1, padding=1, bias=False)
+        self.output_max = nn.Conv2d(int(dim * 1 ** 0), 1, kernel_size=3, stride=1, padding=1, bias=False)
 
     def encoder_translayer(self, x):
         # en_feats = self.shared_encoder(x)
@@ -352,14 +353,17 @@ class CMMF(BasicModelClass):
         feats = fused_list
         feats.reverse()
 
-        x = self.d1(feats[0])
+        x = self.d4(feats[0])
         x = self.upsample_level1(x)
-        x = self.d2(x + feats[1])
-        x = self.upsample_level2(x)
-        x = self.d3(x + feats[2])
-        x = self.upsample_level3(x)
-        x = self.d4(x + feats[3])
 
+        x = self.d3(x + feats[1])
+        x = self.upsample_level2(x)
+
+        x = self.d2(x + feats[2])
+        x = self.upsample_level3(x)
+
+        x = self.d1(x + feats[3])
+        x = self.output_max_context1(x)
         logits = self.output_max(x)
 
         return dict(seg=logits), loss_NR
