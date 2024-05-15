@@ -14,7 +14,6 @@ from tqdm import tqdm
 
 from utils import builder, configurator, io, misc, ops, pipeline, recorder
 
-
 def parse_config():
     parser = argparse.ArgumentParser("Training and evaluation script")
     parser.add_argument("--config", default="./configs/zoomnet/CMMF_swin_s.py", type=str)

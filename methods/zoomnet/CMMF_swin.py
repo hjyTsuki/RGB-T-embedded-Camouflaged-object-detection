@@ -12,7 +12,6 @@ from methods.zoomnet.mlp import INR
 from utils.builder import MODELS
 from utils.ops import cus_sample
 
-
 class ASPP(nn.Module):
     def __init__(self, in_dim, out_dim):
         super(ASPP, self).__init__()
@@ -282,12 +281,14 @@ class CMMF_swin(BasicModelClass):
         super().__init__()
         self.INR_train = False
         dim = 128
-        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3)
+        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
         self.encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.layers[0])
         self.encoder_shared_level2 = nn.Sequential(encoder1.layers[1])
         self.encoder_rgb_private_level3 = encoder1.layers[2]
         self.encoder_rgb_private_level4 = encoder1.layers[3]
-        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3)
+        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
         self.encoder_thermal_private_level3 = encoder2.layers[2]
         self.encoder_thermal_private_level4 = encoder2.layers[3]
 
