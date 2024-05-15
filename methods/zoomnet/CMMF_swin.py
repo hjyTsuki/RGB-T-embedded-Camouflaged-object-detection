@@ -219,6 +219,32 @@ class HMU(nn.Module):
         out = self.fuse(out * gate)
         return self.final_relu(out + x)
 
+class FinalPatchExpand_X4(nn.Module):
+    def __init__(self, input_resolution, dim, dim_scale=4, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.input_resolution = input_resolution
+        self.dim = dim
+        self.dim_scale = dim_scale
+        self.expand = nn.Linear(dim, 16*dim, bias=False)
+        self.output_dim = dim
+        self.norm = norm_layer(self.output_dim)
+
+    def forward(self, x):
+        """
+        x: B, H*W, C
+        """
+        x = rearrange(x, 'b c h w -> b (h w) c')
+        H, W = self.input_resolution
+        x = self.expand(x)
+        B, L, C = x.shape
+        assert L == H * W, "input feature has wrong size"
+
+        x = x.view(B, H, W, C)
+        x = rearrange(x, 'b h w (p1 p2 c)-> b (h p1) (w p2) c', p1=self.dim_scale, p2=self.dim_scale, c=C//(self.dim_scale**2))
+        x = x.view(B, -1, self.output_dim)
+        x= self.norm(x)
+        x = rearrange(x, 'b (h w) c -> b c h w', h=384, w=384)
+        return x
 
 def get_coef(iter_percentage, method):
     if method == "linear":
@@ -251,34 +277,34 @@ def cal_ual(seg_logits, seg_gts):
 
 
 @MODELS.register()
-class CMMF(BasicModelClass):
+class CMMF_swin(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
-        encoder1 = timm.create_model(model_name="swin_tiny_patch4_window7_224", pretrained=False, in_chans=3)
+        dim = 128
+        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3)
         self.encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.layers[0])
         self.encoder_shared_level2 = nn.Sequential(encoder1.layers[1])
         self.encoder_rgb_private_level3 = encoder1.layers[2]
         self.encoder_rgb_private_level4 = encoder1.layers[3]
-        encoder2 = timm.create_model(model_name="swin_tiny_patch4_window7_224", pretrained=False, in_chans=3)
+        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3)
         self.encoder_thermal_private_level3 = encoder2.layers[2]
         self.encoder_thermal_private_level4 = encoder2.layers[3]
 
         self.loss_Func = nn.L1Loss()
         for i in range(4):
-            setattr(self, f'fusion_stage{i}', DetailNode((96 * (2 ** i)), 1))
+            setattr(self, f'fusion_stage{i}', DetailNode((dim * (2 ** i)), 1))
             setattr(self, f'INR{i}', INR(2).cuda())
 
-        dim = 96
-        self.d1 = nn.Sequential(HMU((dim * (2 ** 0)), num_groups=4, hidden_dim=48))
+        self.d1 = nn.Sequential(HMU((dim * (2 ** 0)), num_groups=2, hidden_dim=48))
         self.upsample_level3 = Upsample(dim * (2 ** 1))
-        self.d2 = nn.Sequential(HMU((dim * (2 ** 1)), num_groups=4, hidden_dim=(dim * (2 ** 0))))
-        self.upsample_level2 = Upsample(96 * (2 ** 2))
-        self.d3 = nn.Sequential(HMU((dim * (2 ** 2)), num_groups=4, hidden_dim=(dim * (2 ** 1))))
-        self.upsample_level1 = Upsample(96 * (2 ** 3))
-        self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=4, hidden_dim=(dim * (2 ** 2))))
-        self.output_max_context1 = nn.Conv2d(int(dim * 1 ** 1), 96, kernel_size=3, stride=1, padding=1, bias=False)
-        self.output_max = nn.Conv2d(int(dim * 1 ** 0), 1, kernel_size=3, stride=1, padding=1, bias=False)
+        self.d2 = nn.Sequential(HMU((dim * (2 ** 1)), num_groups=2, hidden_dim=(dim * (2 ** 0))))
+        self.upsample_level2 = Upsample(dim * (2 ** 2))
+        self.d3 = nn.Sequential(HMU((dim * (2 ** 2)), num_groups=2, hidden_dim=(dim * (2 ** 1))))
+        self.upsample_level1 = Upsample(dim * (2 ** 3))
+        self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=2, hidden_dim=(dim * (2 ** 2))))
+        self.up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=dim)
+        self.output = nn.Conv2d(in_channels=dim, out_channels=1, kernel_size=1, bias=False)
 
     def encoder_translayer(self, x):
         # en_feats = self.shared_encoder(x)
@@ -363,9 +389,8 @@ class CMMF(BasicModelClass):
         x = self.upsample_level3(x)
 
         x = self.d1(x + feats[3])
-        x = self.output_max_context1(x)
-        logits = self.output_max(x)
-
+        x = self.up(x)
+        logits = self.output(x)
         return dict(seg=logits), loss_NR
 
     def train_forward(self, data, **kwargs):
@@ -438,10 +463,10 @@ class CMMF(BasicModelClass):
         return param_groups
 
 if __name__ == '__main__':
-    img_rgb, img_thermal = torch.randn(1, 3, 224, 224), torch.randn(1, 3, 224, 224)
+    img_rgb, img_thermal = torch.randn(1, 3, 384, 384), torch.randn(1, 3, 384, 384)
     img_rgb = img_rgb.cuda()
     img_thermal = img_thermal.cuda()
-    model = CMMF().cuda()
+    model = CMMF_swin().cuda()
     input = {"image1.0": img_rgb, "thermal": img_thermal}
     model.test_forward(input)
     print('a')
