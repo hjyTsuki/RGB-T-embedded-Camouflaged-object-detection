@@ -137,13 +137,20 @@ class DetailNode(nn.Module):
         # self.theta_rho = InvertedResidualBlock(inp=inp_dim, oup=out_dim, expand_ratio=2)
         self.bottlenect = nn.Sequential(
             InvertedResidualBlock(inp=inp_dim, oup=inp_dim // 2, expand_ratio=2),
-            InvertedResidualBlock(inp=inp_dim // 2, oup=out_dim, expand_ratio=2)
+
         )
+        self.res = InvertedResidualBlock(inp=inp_dim // 2, oup=inp_dim // 2, expand_ratio=2)
+        self.out = InvertedResidualBlock(inp=inp_dim // 2, oup=1, expand_ratio=2)
         # self.theta_eta = InvertedResidualBlock(inp=inp_dim, oup=out_dim, expand_ratio=2)
 
     def forward(self, xr, xt):
         gamma_xr = self.bottlenect(xr)
+        gamma_xr = gamma_xr + self.res(gamma_xr)
+        gamma_xr = self.out(gamma_xr)
+
         gamma_xt = self.bottlenect(xt)
+        gamma_xt = gamma_xt + self.res(gamma_xt)
+        gamma_xt = self.out(gamma_xt)
 
         dynamic = torch.cat([gamma_xr, gamma_xt], dim=1)
 
@@ -183,8 +190,10 @@ class HMU(nn.Module):
         self.gate_genator = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Conv2d(num_groups * hidden_dim, hidden_dim, 1),
+            # nn.BatchNorm2d(hidden_dim),
             nn.ReLU(True),
             nn.Conv2d(hidden_dim, num_groups * hidden_dim, 1),
+            # nn.BatchNorm2d(num_groups * hidden_dim),
             nn.Softmax(dim=1),
         )
 
@@ -276,19 +285,19 @@ def cal_ual(seg_logits, seg_gts):
 
 
 @MODELS.register()
-class CMMF_swin(BasicModelClass):
+class CMMFSwin(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
         dim = 128
-        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
-                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
+                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
         self.encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.layers[0])
         self.encoder_shared_level2 = nn.Sequential(encoder1.layers[1])
         self.encoder_rgb_private_level3 = encoder1.layers[2]
         self.encoder_rgb_private_level4 = encoder1.layers[3]
-        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
-                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
+                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
         self.encoder_thermal_private_level3 = encoder2.layers[2]
         self.encoder_thermal_private_level4 = encoder2.layers[3]
 
@@ -297,13 +306,14 @@ class CMMF_swin(BasicModelClass):
             setattr(self, f'fusion_stage{i}', DetailNode((dim * (2 ** i)), 1))
             setattr(self, f'INR{i}', INR(2).cuda())
 
-        self.d1 = nn.Sequential(HMU((dim * (2 ** 0)), num_groups=2, hidden_dim=48))
+        self.d1 = nn.Sequential(HMU((dim * (2 ** 0)), num_groups=4, hidden_dim=dim // 2))
         self.upsample_level3 = Upsample(dim * (2 ** 1))
-        self.d2 = nn.Sequential(HMU((dim * (2 ** 1)), num_groups=2, hidden_dim=(dim * (2 ** 0))))
+        self.d2 = nn.Sequential(HMU((dim * (2 ** 1)), num_groups=4, hidden_dim=dim))
         self.upsample_level2 = Upsample(dim * (2 ** 2))
-        self.d3 = nn.Sequential(HMU((dim * (2 ** 2)), num_groups=2, hidden_dim=(dim * (2 ** 1))))
+        self.d3 = nn.Sequential(HMU((dim * (2 ** 2)), num_groups=4, hidden_dim=dim))
         self.upsample_level1 = Upsample(dim * (2 ** 3))
-        self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=2, hidden_dim=(dim * (2 ** 2))))
+        # self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=2, hidden_dim=(dim * (2 ** 2))))
+        self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=4, hidden_dim=dim))
         self.up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=dim)
         self.output = nn.Conv2d(in_channels=dim, out_channels=1, kernel_size=1, bias=False)
 
@@ -440,14 +450,14 @@ class CMMF_swin(BasicModelClass):
     def get_grouped_params(self):
         param_groups = {}
         for name, param in self.named_parameters():
-            if name.startswith("shared_encoder.layer"):
-                param_groups.setdefault("pretrained", []).append(param)
-            elif name.startswith("encoder"):
-                param_groups.setdefault("pretrained", []).append(param)
-            elif name.startswith("shared_encoder."):
-                param_groups.setdefault("fixed", []).append(param)
-            else:
-                param_groups.setdefault("retrained", []).append(param)
+            # if name.startswith("shared_encoder.layer"):
+            #     param_groups.setdefault("pretrained", []).append(param)
+            # elif name.startswith("encoder"):
+            #     param_groups.setdefault("pretrained", []).append(param)
+            # elif name.startswith("shared_encoder."):
+            #     param_groups.setdefault("fixed", []).append(param)
+            # else:
+            param_groups.setdefault("retrained", []).append(param)
         return param_groups
 
     def get_grouped_INR_params(self):
@@ -467,7 +477,7 @@ if __name__ == '__main__':
     img_rgb, img_thermal = torch.randn(1, 3, 384, 384), torch.randn(1, 3, 384, 384)
     img_rgb = img_rgb.cuda()
     img_thermal = img_thermal.cuda()
-    model = CMMF_swin().cuda()
+    model = CMMFSwin().cuda()
     input = {"image1.0": img_rgb, "thermal": img_thermal}
     model.test_forward(input)
     print('a')

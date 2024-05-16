@@ -77,7 +77,7 @@ def group_params(model, group_mode, initial_lr, optim_cfg):
         assert hasattr(model, "get_grouped_params"), "Cannot get the method get_grouped_params of the model."
         params_groups = model.get_grouped_params()
         params = [
-            {"params": params_groups["pretrained"], "lr": 0.1 * initial_lr},
+            # {"params": params_groups["pretrained"], "lr": 0.1 * initial_lr},
             {"params": params_groups["retrained"], "lr": initial_lr},
         ]
     elif group_mode == "INR":
