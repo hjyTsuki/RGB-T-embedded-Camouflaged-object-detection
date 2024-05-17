@@ -53,7 +53,7 @@ scipy == 1.6.2
 # ZoomNet/methods/classic_methods/MINet.py: 2
 # ZoomNet/methods/module/conv_block.py: 7
 # ZoomNet/methods/zoomnet/zoomnet.py: 2
-timm == 0.4.12
+timm
 
 # ZoomNet/dataset/base_dataset.py: 9,10
 # ZoomNet/dataset/msi_cod.py: 7
@@ -76,14 +76,14 @@ timm == 0.4.12
 # ZoomNet/utils/pipeline/scheduler.py: 13
 # ZoomNet/utils/recorder/tensorboard.py: 6
 # ZoomNet/utils/recorder/visualize_results.py: 4
-torch == 1.8.1
+# torch == 1.8.1
 
 # ZoomNet/dataset/msi_sod.py: 6
 # ZoomNet/methods/classic_methods/CMWNet.py: 8
 # ZoomNet/methods/classic_methods/CPD.py: 13
 # ZoomNet/utils/recorder/tensorboard.py: 7
 # ZoomNet/utils/recorder/visualize_results.py: 5,6
-torchvision == 0.9.1
+# torchvision == 0.9.1
 
 # ZoomNet/main.py: 12
 # ZoomNet/test.py: 10

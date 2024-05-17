@@ -301,8 +301,8 @@ class Configurator:
             blank_line_before_nested_class_or_def=True,
             split_before_expression_after_opening_paren=True,
         )
-        text, _ = FormatCode(text, style_config=yapf_style, verify=True)
-
+        # text, _ = FormatCode(text, style_config=yapf_style, verify=True)
+        text, _ = FormatCode(text, style_config=yapf_style)
         return text
 
     def __repr__(self):

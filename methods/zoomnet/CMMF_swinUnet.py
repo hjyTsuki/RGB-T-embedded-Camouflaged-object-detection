@@ -156,6 +156,29 @@ class DetailNode(nn.Module):
 
         return dynamic
 
+class PatchExpand(nn.Module):
+    def __init__(self, input_resolution, dim, dim_scale=2, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.input_resolution = input_resolution
+        self.dim = dim
+        self.expand = nn.Linear(dim, 2*dim, bias=False) if dim_scale==2 else nn.Identity()
+        self.norm = norm_layer(dim // dim_scale)
+
+    def forward(self, x):
+        """
+        x: B, H*W, C
+        """
+        H, W = self.input_resolution
+        x = self.expand(x)
+        B, L, C = x.shape
+        assert L == H * W, "input feature has wrong size"
+
+        x = x.view(B, H, W, C)
+        x = rearrange(x, 'b h w (p1 p2 c)-> b (h p1) (w p2) c', p1=2, p2=2, c=C//4)
+        x = x.view(B,-1,C//4)
+        x= self.norm(x)
+
+        return x
 
 def save_weight(tensor_data, time):
     # 将Tensor转换为字符串格式，这里使用join来连接行，使用'\t'作为分隔符
@@ -241,7 +264,7 @@ class FinalPatchExpand_X4(nn.Module):
         """
         x: B, H*W, C
         """
-        x = rearrange(x, 'b c h w -> b (h w) c')
+        x = rearrange(x, 'b h w c-> b (h w) c')
         H, W = self.input_resolution
         x = self.expand(x)
         B, L, C = x.shape
@@ -290,14 +313,17 @@ class CMMFSwin(BasicModelClass):
         super().__init__()
         self.INR_train = False
         dim = 128
-        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
-                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        input_shape = 96
+        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
+                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
         self.encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.layers[0])
         self.encoder_shared_level2 = nn.Sequential(encoder1.layers[1])
         self.encoder_rgb_private_level3 = encoder1.layers[2]
         self.encoder_rgb_private_level4 = encoder1.layers[3]
-        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
-                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
+                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
+        # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
         self.encoder_thermal_private_level3 = encoder2.layers[2]
         self.encoder_thermal_private_level4 = encoder2.layers[3]
 
@@ -306,15 +332,16 @@ class CMMFSwin(BasicModelClass):
             setattr(self, f'fusion_stage{i}', DetailNode((dim * (2 ** i)), 1))
             setattr(self, f'INR{i}', INR(2).cuda())
 
-        self.d1 = nn.Sequential(HMU((dim * (2 ** 0)), num_groups=4, hidden_dim=dim // 2))
-        self.upsample_level3 = Upsample(dim * (2 ** 1))
-        self.d2 = nn.Sequential(HMU((dim * (2 ** 1)), num_groups=4, hidden_dim=dim))
-        self.upsample_level2 = Upsample(dim * (2 ** 2))
-        self.d3 = nn.Sequential(HMU((dim * (2 ** 2)), num_groups=4, hidden_dim=dim))
-        self.upsample_level1 = Upsample(dim * (2 ** 3))
-        # self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=2, hidden_dim=(dim * (2 ** 2))))
-        self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=4, hidden_dim=dim))
-        self.up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=dim)
+        decoder = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
+        # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        self.d1 = nn.Sequential(decoder.layers[-1].blocks)
+        self.upsample_level1 = PatchExpand((input_shape // (2 ** 3), input_shape // (2 ** 3)), dim=(dim * (2 ** 3)), dim_scale=2)
+        self.d2 = nn.Sequential(decoder.layers[-2].blocks)
+        self.upsample_level2 = PatchExpand((input_shape // (2 ** 2), input_shape // (2 ** 2)), dim=(dim * (2 ** 2)), dim_scale=2)
+        self.d3 = nn.Sequential(decoder.layers[-3].blocks)
+        self.upsample_level3 = PatchExpand((input_shape // (2 ** 1), input_shape // (2 ** 1)), dim=(dim * (2 ** 1)), dim_scale=2)
+        self.d4 = nn.Sequential(decoder.layers[-4].blocks)
+        self.up = FinalPatchExpand_X4(input_resolution=(input_shape // (2 ** 0), input_shape // (2 ** 0)), dim_scale=4, dim=dim)
         self.output = nn.Conv2d(in_channels=dim, out_channels=1, kernel_size=1, bias=False)
 
     def encoder_translayer(self, x):
@@ -385,21 +412,25 @@ class CMMFSwin(BasicModelClass):
                 dynamic_xt = (torch.abs(dynamic[1]) + 1e-30) / (
                     torch.abs(dynamic[0]) + torch.abs(dynamic[1]) + 1e-30)
             fused = xr * dynamic_xr + xt * dynamic_xt
+            fused = rearrange(fused, 'b c h w -> b h w c')
             fused_list.append(fused)
 
         feats = fused_list
         feats.reverse()
 
-        x = self.d4(feats[0])
+        x = self.d1(feats[0])
+        x = rearrange(x, 'b h w c-> b (h w) c')
         x = self.upsample_level1(x)
-
-        x = self.d3(x + feats[1])
+        x = rearrange(x, 'b (h w) c-> b h w c', h=feats[1].shape[-2], w=feats[1].shape[-2])
+        x = self.d2(x + feats[1])
+        x = rearrange(x, 'b h w c-> b (h w) c')
         x = self.upsample_level2(x)
-
-        x = self.d2(x + feats[2])
+        x = rearrange(x, 'b (h w) c-> b h w c', h=feats[2].shape[-2], w=feats[2].shape[-2])
+        x = self.d3(x + feats[2])
+        x = rearrange(x, 'b h w c-> b (h w) c')
         x = self.upsample_level3(x)
-
-        x = self.d1(x + feats[3])
+        x = rearrange(x, 'b (h w) c-> b h w c', h=feats[3].shape[-2], w=feats[3].shape[-2])
+        x = self.d4(x + feats[3])
         x = self.up(x)
         logits = self.output(x)
         return dict(seg=logits), loss_NR
