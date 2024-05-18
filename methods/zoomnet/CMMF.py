@@ -103,9 +103,9 @@ class TRFusion(nn.Module):
         t_feat = self.thermalSampling(thermal_feat)
         return rgb_feat*r_feat + t_feat*thermal_feat
 
-class InvertedResidualBlock(nn.Module):
+class ResidualBlock(nn.Module):
     def __init__(self, inp, oup, expand_ratio):
-        super(InvertedResidualBlock, self).__init__()
+        super(ResidualBlock, self).__init__()
         hidden_dim = int(inp // expand_ratio)
         self.bottleneckBlock = nn.Sequential(
             # pw
@@ -125,6 +125,26 @@ class InvertedResidualBlock(nn.Module):
     def forward(self, x):
         return self.bottleneckBlock(x)
 
+class InvertedResidualBlock(nn.Module):
+    def __init__(self, inp, oup, expand_ratio):
+        super(InvertedResidualBlock, self).__init__()
+        hidden_dim = int(inp * expand_ratio)
+        self.bottleneckBlock = nn.Sequential(
+            # pw
+            nn.Conv2d(inp, hidden_dim, 1, bias=False),
+            # nn.BatchNorm2d(hidden_dim),
+            nn.ReLU6(inplace=True),
+            # dw
+            nn.ReflectionPad2d(1),
+            nn.Conv2d(hidden_dim, hidden_dim, 3, groups=hidden_dim, bias=False),
+            # nn.BatchNorm2d(hidden_dim),
+            nn.ReLU6(inplace=True),
+            # pw-linear
+            nn.Conv2d(hidden_dim, oup, 1, bias=False),
+            # nn.BatchNorm2d(oup),
+        )
+    def forward(self, x):
+        return self.bottleneckBlock(x)
 
 class DetailNode(nn.Module):
     def __init__(self,
@@ -135,19 +155,26 @@ class DetailNode(nn.Module):
         # Scale is Ax + b, i.e. affine transformation
         # self.theta_phi = InvertedResidualBlock(inp=inp_dim, oup=inp_dim, expand_ratio=2)
         # self.theta_rho = InvertedResidualBlock(inp=inp_dim, oup=out_dim, expand_ratio=2)
+        self.weight_encoder = nn.Sequential(
+            ResidualBlock(inp=inp_dim, oup=inp_dim // 2, expand_ratio=2),
+            ResidualBlock(inp=inp_dim // 2, oup=out_dim, expand_ratio=2)
+        )
         self.bottlenect = nn.Sequential(
-            InvertedResidualBlock(inp=inp_dim, oup=inp_dim // 2, expand_ratio=2),
-            InvertedResidualBlock(inp=inp_dim // 2, oup=out_dim, expand_ratio=2)
+            InvertedResidualBlock(inp=inp_dim, oup=inp_dim, expand_ratio=2),
+            InvertedResidualBlock(inp=inp_dim, oup=inp_dim, expand_ratio=2)
         )
         # self.theta_eta = InvertedResidualBlock(inp=inp_dim, oup=out_dim, expand_ratio=2)
 
     def forward(self, xr, xt):
-        gamma_xr = self.bottlenect(xr)
-        gamma_xt = self.bottlenect(xt)
+        w_xr = self.weight_encoder(xr)
+        w_xt = self.weight_encoder(xt)
 
-        dynamic = torch.cat([gamma_xr, gamma_xt], dim=1)
+        gamma_xr = xr + self.bottlenect(xr)
+        gamma_xt = xt + self.bottlenect(xt)
 
-        return dynamic
+        dynamic = torch.cat([w_xr, w_xt], dim=1)
+
+        return dynamic, gamma_xr, gamma_xt
 
 
 def save_weight(tensor_data, time):
@@ -330,7 +357,7 @@ class CMMF(BasicModelClass):
             xr = feats[i]
             xt = t_trans_feats[i]
             gate = getattr(self, f'fusion_stage{i}')
-            dynamic = (gate(xr, xt))
+            dynamic, xr, xt = (gate(xr, xt))
 
             if self.INR_train:
                 INR_Trans = getattr(self, f'INR{i}')

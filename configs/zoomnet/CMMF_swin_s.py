@@ -10,7 +10,7 @@ use_custom_worker_init = False
 model_name = "CMMFSwin"
 
 train = dict(
-    batch_size=4,
+    batch_size=8,
     num_workers=4,
     use_amp=True,
     num_epochs=500,
@@ -18,7 +18,7 @@ train = dict(
     epoch_based=True,
     lr=0.05,
     optimizer=dict(
-        mode="sgd",
+        mode="adamw",
         set_to_none=True,
         group_mode="finetune",
         cfg=dict(

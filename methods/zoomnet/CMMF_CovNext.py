@@ -12,48 +12,6 @@ from methods.zoomnet.mlp import INR
 from utils.builder import MODELS
 from utils.ops import cus_sample
 
-class ASPP(nn.Module):
-    def __init__(self, in_dim, out_dim):
-        super(ASPP, self).__init__()
-        self.conv1 = ConvBNReLU(in_dim, out_dim, kernel_size=1)
-        self.conv2 = ConvBNReLU(in_dim, out_dim, kernel_size=3, dilation=2, padding=2)
-        self.conv3 = ConvBNReLU(in_dim, out_dim, kernel_size=3, dilation=5, padding=5)
-        self.conv4 = ConvBNReLU(in_dim, out_dim, kernel_size=3, dilation=7, padding=7)
-        self.conv5 = ConvBNReLU(in_dim, out_dim, kernel_size=1)
-        self.fuse = ConvBNReLU(5 * out_dim, out_dim, 3, 1, 1)
-
-    def forward(self, x):
-        conv1 = self.conv1(x)
-        conv2 = self.conv2(x)
-        conv3 = self.conv3(x)
-        conv4 = self.conv4(x)
-        conv5 = self.conv5(cus_sample(x.mean((2, 3), keepdim=True), mode="size", factors=x.size()[2:]))
-        return self.fuse(torch.cat((conv1, conv2, conv3, conv4, conv5), 1))
-
-
-class TransLayer(nn.Module):
-    def __init__(self, out_c, last_module=ASPP):
-        super().__init__()
-        self.c5_down = nn.Sequential(
-            # ConvBNReLU(2048, 256, 3, 1, 1),
-            last_module(in_dim=2048, out_dim=out_c),
-        )
-        self.c4_down = nn.Sequential(ConvBNReLU(1024, out_c, 3, 1, 1))
-        self.c3_down = nn.Sequential(ConvBNReLU(512, out_c, 3, 1, 1))
-        self.c2_down = nn.Sequential(ConvBNReLU(256, out_c, 3, 1, 1))
-        self.c1_down = nn.Sequential(ConvBNReLU(64, out_c, 3, 1, 1))
-
-    def forward(self, xs):
-        assert isinstance(xs, (tuple, list))
-        assert len(xs) == 5
-        c1, c2, c3, c4, c5 = xs
-        c5 = self.c5_down(c5)
-        c4 = self.c4_down(c4)
-        c3 = self.c3_down(c3)
-        c2 = self.c2_down(c2)
-        c1 = self.c1_down(c1)
-        return c5, c4, c3, c2, c1
-
 
 class SIU(nn.Module):
     def __init__(self, in_dim):
@@ -179,10 +137,10 @@ def save_weight(tensor_data, time):
 
 
 class Upsample(nn.Module):
-    def __init__(self, n_feat, out_channel):
+    def __init__(self, n_feat):
         super(Upsample, self).__init__()
 
-        self.body = nn.Sequential(nn.Conv2d(n_feat, out_channel, kernel_size=3, stride=1, padding=1, bias=False),
+        self.body = nn.Sequential(nn.Conv2d(n_feat, 2 * n_feat, kernel_size=3, stride=1, padding=1, bias=False),
                                   nn.PixelShuffle(2))
 
     def forward(self, x):
@@ -298,32 +256,32 @@ class CMMFSwin(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
-        dim = [32, 64, 160, 256]
-        encoder1 = timm.create_model(model_name="pvt_v2_b0", pretrained=False, in_chans=3)
+        dim = 128
+        encoder1 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=False, in_chans=3)
 
-        self.encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.stages[0])
-        self.encoder_shared_level2 = nn.Sequential(encoder1.stages[1])
-        self.encoder_rgb_private_level3 = encoder1.stages[2]
-        self.encoder_rgb_private_level4 = encoder1.stages[3]
-        encoder2 = timm.create_model(model_name="pvt_v2_b0", pretrained=False, in_chans=3,
-                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
-        self.encoder_thermal_private_level3 = encoder2.stages[2]
-        self.encoder_thermal_private_level4 = encoder2.stages[3]
+        self.encoder_shared_level1 = nn.Sequential(encoder1.stem_0, encoder1.stem_1, encoder1.stages_0)
+        self.encoder_shared_level2 = nn.Sequential(encoder1.stages_1)
+        self.encoder_rgb_private_level3 = encoder1.stages_2
+        self.encoder_rgb_private_level4 = encoder1.stages_3
+        encoder2 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=False, in_chans=3)
+                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        self.encoder_thermal_private_level3 = encoder2.stages_2
+        self.encoder_thermal_private_level4 = encoder2.stages_3
 
         self.loss_Func = nn.L1Loss()
         for i in range(4):
-            setattr(self, f'fusion_stage{i}', DetailNode((dim[i]), 1))
+            setattr(self, f'fusion_stage{i}', DetailNode((dim * (2 ** i)), 1))
             setattr(self, f'INR{i}', INR(2).cuda())
 
-        self.d1 = nn.Sequential(HMU(32, num_groups=4, hidden_dim=32 // 2))
-        self.upsample_level3 = Upsample(32, 64)
-        self.d2 = nn.Sequential(HMU(64, num_groups=4, hidden_dim=32))
-        self.upsample_level2 = Upsample(64, 160)
-        self.d3 = nn.Sequential(HMU(160, num_groups=4, hidden_dim=80))
-        self.upsample_level1 = Upsample(160, 256)
-        self.d4 = nn.Sequential(HMU(256, num_groups=4, hidden_dim=256 // 2))
-        self.up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=32)
-        self.output = nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1, bias=False)
+        self.d1 = nn.Sequential(HMU((dim * (2 ** 0)), num_groups=4, hidden_dim=dim // 2))
+        self.upsample_level3 = Upsample(dim * (2 ** 1))
+        self.d2 = nn.Sequential(HMU((dim * (2 ** 1)), num_groups=4, hidden_dim=dim))
+        self.upsample_level2 = Upsample(dim * (2 ** 2))
+        self.d3 = nn.Sequential(HMU((dim * (2 ** 2)), num_groups=4, hidden_dim=dim * 2))
+        self.upsample_level1 = Upsample(dim * (2 ** 3))
+        self.d4 = nn.Sequential(HMU((dim * (2 ** 3)), num_groups=4, hidden_dim=dim * 2))
+        self.up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=dim)
+        self.output = nn.Conv2d(in_channels=dim, out_channels=1, kernel_size=1, bias=False)
 
     def encoder_translayer(self, x):
         # en_feats = self.shared_encoder(x)
@@ -332,14 +290,9 @@ class CMMFSwin(BasicModelClass):
         f2 = self.encoder_shared_level2(f1)
         f3 = self.encoder_rgb_private_level3(f2)
         f4 = self.encoder_rgb_private_level4(f3)
-
-        f1 = rearrange(f1, 'b h w c -> b c h w')
         en_feats.append(f1)
-        f2 = rearrange(f2, 'b h w c -> b c h w')
         en_feats.append(f2)
-        f3 = rearrange(f3, 'b h w c -> b c h w')
         en_feats.append(f3)
-        f4 = rearrange(f4, 'b h w c -> b c h w')
         en_feats.append(f4)
 
         return en_feats
@@ -353,13 +306,9 @@ class CMMFSwin(BasicModelClass):
         f3 = self.encoder_rgb_private_level3(f2)
         f4 = self.encoder_rgb_private_level4(f3)
 
-        f1 = rearrange(f1, 'b h w c -> b c h w')
         en_feats.append(f1)
-        f2 = rearrange(f2, 'b h w c -> b c h w')
         en_feats.append(f2)
-        f3 = rearrange(f3, 'b h w c -> b c h w')
         en_feats.append(f3)
-        f4 = rearrange(f4, 'b h w c -> b c h w')
         en_feats.append(f4)
 
         return en_feats
