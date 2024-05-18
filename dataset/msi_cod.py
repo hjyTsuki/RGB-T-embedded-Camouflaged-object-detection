@@ -113,19 +113,27 @@ class MSICOD_TrainDataset(_BaseSODDataset):
         image_1_0 = torch.from_numpy(images[1]).permute(2, 0, 1)
         image_1_5 = torch.from_numpy(images[2]).permute(2, 0, 1)
 
+        thermals = ms_resize(thermal, scales=(0.5, 1.0, 1.5), base_h=base_h, base_w=base_w)
+        thermal_0_5 = torch.from_numpy(thermals[0]).permute(2, 0, 1)
+        thermal_1_0 = torch.from_numpy(thermals[1]).permute(2, 0, 1)
+        thermal_1_5 = torch.from_numpy(thermals[2]).permute(2, 0, 1)
+
         mask = ss_resize(mask, scale=1.0, base_h=base_h, base_w=base_w)
         mask_1_0 = torch.from_numpy(mask).unsqueeze(0)
 
-        thermal = ts_resize(thermal, scales=1.0, base_h=base_h, base_w=base_w)
-        thermal = torch.from_numpy(thermal).permute(2, 0, 1)
+        # edge_gt = cv2.Canny(mask_1_0, threshold1=100, threshold2=200)
 
         return dict(
             data={
                 "image1.5": image_1_5,
                 "image1.0": image_1_0,
                 "image0.5": image_0_5,
+                "thermal0.5": thermal_0_5,
+                "thermal1.0": thermal_1_0,
+                "thermal1.5": thermal_1_5,
                 "mask": mask_1_0,
-                "thermal": thermal
+                # "thermal": thermal,
+                # "edge": edge_gt
             }
         )
 

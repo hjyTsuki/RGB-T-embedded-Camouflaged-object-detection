@@ -92,17 +92,6 @@ class SIU(nn.Module):
         return lms
 
 
-class TRFusion(nn.Module):
-    def __init__(self, in_dim):
-        super(TRFusion, self).__init__()
-        self.rgbSampling = ConvBNReLU(in_dim, in_dim, 3, stride=1, padding=1)
-        self.thermalSampling = ConvBNReLU(in_dim, in_dim, 3, stride=1, padding=1)
-
-    def forward(self, rgb_feat, thermal_feat):
-        r_feat = self.rgbSampling(rgb_feat)
-        t_feat = self.thermalSampling(thermal_feat)
-        return rgb_feat*r_feat + t_feat*thermal_feat
-
 class ResidualBlock(nn.Module):
     def __init__(self, inp, oup, expand_ratio):
         super(ResidualBlock, self).__init__()
@@ -272,8 +261,14 @@ class CMMF(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
-        encoder1 = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
-        encoder2 = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+        # encoder1 = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+        # encoder2 = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+        # encoder1 = timm.create_model(model_name="resnet152.a1_in1k", pretrained=True, in_chans=3, features_only=True)
+        # encoder2 = timm.create_model(model_name="resnet101", pretrained=True, in_chans=3, features_only=True)
+        encoder1 = timm.create_model(model_name="resnet152", pretrained=True, in_chans=3, features_only=True,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\resnet152\\model.safetensors'))
+        encoder2 = timm.create_model(model_name="resnet152", pretrained=True, in_chans=3, features_only=True,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\resnet152\\model.safetensors'))
         self.encoder_shared_level1 = nn.Sequential(encoder1.conv1, encoder1.bn1, encoder1.act1)
         self.encoder_shared_level2 = nn.Sequential(encoder1.maxpool, encoder1.layer1)
         self.encoder_rgb_private_level3 = encoder1.layer2
@@ -335,27 +330,30 @@ class CMMF(BasicModelClass):
         trans_feats = self.t_translayer(en_feats)
         return trans_feats
 
-    def body(self, l_scale, m_scale, s_scale, thermal):
+    def body(self, l_scale, m_scale, s_scale, l_t_scale, m_t_scale, s_t_scale):
         l_trans_feats = self.encoder_translayer(l_scale)
         m_trans_feats = self.encoder_translayer(m_scale)
         s_trans_feats = self.encoder_translayer(s_scale)
 
-        t_trans_feats = self.t_encoder_translayer(thermal)
+        t_l_trans_feats = self.encoder_translayer(l_t_scale)
+        t_m_trans_feats = self.encoder_translayer(m_t_scale)
+        t_s_trans_feats = self.encoder_translayer(s_t_scale)
 
         feats = []
         for l, m, s, layer in zip(l_trans_feats, m_trans_feats, s_trans_feats, self.merge_layers):
             siu_outs = layer(l=l, m=m, s=s)
             feats.append(siu_outs)
 
-        # for r, t, layer in zip(feats, t_trans_feats, self.fusion_layer):
-        #     fusion_outs = layer(r, t)
-        #     feats.append(fusion_outs)
+        t_feats = []
+        for l, m, s, layer in zip(t_l_trans_feats, t_m_trans_feats, t_s_trans_feats, self.merge_layers):
+            siu_outs = layer(l=l, m=m, s=s)
+            t_feats.append(siu_outs)
 
         fused_list = []
         loss_NR = torch.Tensor([0.0]).cuda()
         for i in range(len(feats)):
             xr = feats[i]
-            xt = t_trans_feats[i]
+            xt = t_feats[i]
             gate = getattr(self, f'fusion_stage{i}')
             dynamic, xr, xt = (gate(xr, xt))
 
@@ -401,7 +399,9 @@ class CMMF(BasicModelClass):
             l_scale=data["image1.5"],
             m_scale=data["image1.0"],
             s_scale=data["image0.5"],
-            thermal=data["thermal"]
+            l_t_scale=data["thermal1.5"],
+            m_t_scale=data["thermal1.0"],
+            s_t_scale=data["thermal0.5"]
         )
         loss, loss_str = self.cal_loss(
             all_preds=output,
@@ -416,7 +416,9 @@ class CMMF(BasicModelClass):
             l_scale=data["image1.5"],
             m_scale=data["image1.0"],
             s_scale=data["image0.5"],
-            thermal=data["thermal"]
+            l_t_scale=data["thermal1.5"],
+            m_t_scale=data["thermal1.0"],
+            s_t_scale=data["thermal0.5"]
         )
         return output["seg"]
 
@@ -467,3 +469,20 @@ class CMMF(BasicModelClass):
                 param_groups.setdefault("fixd", []).append(param)
         return param_groups
 
+if __name__ == '__main__':
+    img_rgb, img_thermal = torch.randn(1, 3, 384, 384), torch.randn(1, 3, 384, 384)
+    img_rgb_0_5, img_thermal_0_5 = torch.randn(1, 3, 192, 192).cuda(), torch.randn(1, 3, 192, 192).cuda()
+    img_rgb_1_5, img_thermal_1_5 = torch.randn(1, 3, 576, 576).cuda(), torch.randn(1, 3, 576, 576).cuda()
+    img_rgb = img_rgb.cuda()
+    img_thermal = img_thermal.cuda()
+    model = CMMF().cuda()
+    input = {
+        "image1.5": img_rgb_1_5,
+        "image1.0": img_rgb,
+        "image0.5": img_rgb_0_5,
+        "thermal1.5": img_thermal_1_5,
+        "thermal1.0": img_thermal,
+        "thermal0.5": img_thermal_0_5
+    }
+    model.test_forward(input)
+    print('a')

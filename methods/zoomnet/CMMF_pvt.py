@@ -182,10 +182,11 @@ class Upsample(nn.Module):
     def __init__(self, n_feat, out_channel):
         super(Upsample, self).__init__()
 
-        self.body = nn.Sequential(nn.Conv2d(n_feat, out_channel, kernel_size=3, stride=1, padding=1, bias=False),
-                                  nn.PixelShuffle(2))
+        self.body = nn.Conv2d(n_feat, out_channel, kernel_size=3, stride=1, padding=1, bias=False)
+        # self.shuffle = nn.PixelShuffle(2)
 
     def forward(self, x):
+        # x = self.body(x)
         return self.body(x)
 
 class HMU(nn.Module):
@@ -294,19 +295,19 @@ def cal_ual(seg_logits, seg_gts):
 
 
 @MODELS.register()
-class CMMFSwin(BasicModelClass):
+class CMMFPvt(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
         dim = [32, 64, 160, 256]
-        encoder1 = timm.create_model(model_name="pvt_v2_b0", pretrained=False, in_chans=3)
-
+        encoder1 = timm.create_model(model_name="pvt_v2_b0", pretrained=False, in_chans=3,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\pvt_b0\\model.safetensors'))
         self.encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.stages[0])
         self.encoder_shared_level2 = nn.Sequential(encoder1.stages[1])
         self.encoder_rgb_private_level3 = encoder1.stages[2]
         self.encoder_rgb_private_level4 = encoder1.stages[3]
         encoder2 = timm.create_model(model_name="pvt_v2_b0", pretrained=False, in_chans=3,
-                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\pvt_b0\\model.safetensors'))
         self.encoder_thermal_private_level3 = encoder2.stages[2]
         self.encoder_thermal_private_level4 = encoder2.stages[3]
 
@@ -316,11 +317,11 @@ class CMMFSwin(BasicModelClass):
             setattr(self, f'INR{i}', INR(2).cuda())
 
         self.d1 = nn.Sequential(HMU(32, num_groups=4, hidden_dim=32 // 2))
-        self.upsample_level3 = Upsample(32, 64)
+        self.upsample_level3 = Upsample(64, 32)
         self.d2 = nn.Sequential(HMU(64, num_groups=4, hidden_dim=32))
-        self.upsample_level2 = Upsample(64, 160)
+        self.upsample_level2 = Upsample(160, 64)
         self.d3 = nn.Sequential(HMU(160, num_groups=4, hidden_dim=80))
-        self.upsample_level1 = Upsample(160, 256)
+        self.upsample_level1 = Upsample(256, 160)
         self.d4 = nn.Sequential(HMU(256, num_groups=4, hidden_dim=256 // 2))
         self.up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=32)
         self.output = nn.Conv2d(in_channels=32, out_channels=1, kernel_size=1, bias=False)
@@ -333,13 +334,13 @@ class CMMFSwin(BasicModelClass):
         f3 = self.encoder_rgb_private_level3(f2)
         f4 = self.encoder_rgb_private_level4(f3)
 
-        f1 = rearrange(f1, 'b h w c -> b c h w')
+        # f1 = rearrange(f1, 'b h w c -> b c h w')
         en_feats.append(f1)
-        f2 = rearrange(f2, 'b h w c -> b c h w')
+        # f2 = rearrange(f2, 'b h w c -> b c h w')
         en_feats.append(f2)
-        f3 = rearrange(f3, 'b h w c -> b c h w')
+        # f3 = rearrange(f3, 'b h w c -> b c h w')
         en_feats.append(f3)
-        f4 = rearrange(f4, 'b h w c -> b c h w')
+        # f4 = rearrange(f4, 'b h w c -> b c h w')
         en_feats.append(f4)
 
         return en_feats
@@ -353,13 +354,13 @@ class CMMFSwin(BasicModelClass):
         f3 = self.encoder_rgb_private_level3(f2)
         f4 = self.encoder_rgb_private_level4(f3)
 
-        f1 = rearrange(f1, 'b h w c -> b c h w')
+        # f1 = rearrange(f1, 'b h w c -> b c h w')
         en_feats.append(f1)
-        f2 = rearrange(f2, 'b h w c -> b c h w')
+        # f2 = rearrange(f2, 'b h w c -> b c h w')
         en_feats.append(f2)
-        f3 = rearrange(f3, 'b h w c -> b c h w')
+        # f3 = rearrange(f3, 'b h w c -> b c h w')
         en_feats.append(f3)
-        f4 = rearrange(f4, 'b h w c -> b c h w')
+        # f4 = rearrange(f4, 'b h w c -> b c h w')
         en_feats.append(f4)
 
         return en_feats
@@ -399,15 +400,19 @@ class CMMFSwin(BasicModelClass):
         feats.reverse()
 
         x = self.d4(feats[0])
+        x = cus_sample(x, mode="scale", factors=2)
         x = self.upsample_level1(x)
 
         x = self.d3(x + feats[1])
+        x = cus_sample(x, mode="scale", factors=2)
         x = self.upsample_level2(x)
 
         x = self.d2(x + feats[2])
+        x = cus_sample(x, mode="scale", factors=2)
         x = self.upsample_level3(x)
 
         x = self.d1(x + feats[3])
+
         x = self.up(x)
         logits = self.output(x)
         return dict(seg=logits), loss_NR
@@ -485,7 +490,7 @@ if __name__ == '__main__':
     img_rgb, img_thermal = torch.randn(1, 3, 384, 384), torch.randn(1, 3, 384, 384)
     img_rgb = img_rgb.cuda()
     img_thermal = img_thermal.cuda()
-    model = CMMFSwin().cuda()
+    model = CMMFPvt().cuda()
     input = {"image1.0": img_rgb, "thermal": img_thermal}
     model.test_forward(input)
     print('a')

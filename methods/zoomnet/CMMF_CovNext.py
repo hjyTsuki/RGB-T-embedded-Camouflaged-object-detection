@@ -252,21 +252,22 @@ def cal_ual(seg_logits, seg_gts):
 
 
 @MODELS.register()
-class CMMFSwin(BasicModelClass):
+class CMMFConvNext(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
         dim = 128
-        encoder1 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=False, in_chans=3)
+        encoder1 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=True, in_chans=3,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\convnext_B\\model.safetensors'))
 
-        self.encoder_shared_level1 = nn.Sequential(encoder1.stem_0, encoder1.stem_1, encoder1.stages_0)
-        self.encoder_shared_level2 = nn.Sequential(encoder1.stages_1)
-        self.encoder_rgb_private_level3 = encoder1.stages_2
-        self.encoder_rgb_private_level4 = encoder1.stages_3
-        encoder2 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=False, in_chans=3)
-                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
-        self.encoder_thermal_private_level3 = encoder2.stages_2
-        self.encoder_thermal_private_level4 = encoder2.stages_3
+        self.encoder_shared_level1 = nn.Sequential(encoder1.stem, encoder1.stages[0])
+        self.encoder_shared_level2 = nn.Sequential(encoder1.stages[1])
+        self.encoder_rgb_private_level3 = encoder1.stages[2]
+        self.encoder_rgb_private_level4 = encoder1.stages[3]
+        encoder2 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=True, in_chans=3,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\convnext_B\\model.safetensors'))
+        self.encoder_thermal_private_level3 = encoder2.stages[2]
+        self.encoder_thermal_private_level4 = encoder2.stages[3]
 
         self.loss_Func = nn.L1Loss()
         for i in range(4):
@@ -407,14 +408,14 @@ class CMMFSwin(BasicModelClass):
     def get_grouped_params(self):
         param_groups = {}
         for name, param in self.named_parameters():
-            # if name.startswith("shared_encoder.layer"):
-            #     param_groups.setdefault("pretrained", []).append(param)
-            # elif name.startswith("encoder"):
-            #     param_groups.setdefault("pretrained", []).append(param)
-            # elif name.startswith("shared_encoder."):
-            #     param_groups.setdefault("fixed", []).append(param)
-            # else:
-            param_groups.setdefault("retrained", []).append(param)
+            if name.startswith("shared_encoder.layer"):
+                param_groups.setdefault("pretrained", []).append(param)
+            elif name.startswith("encoder"):
+                param_groups.setdefault("pretrained", []).append(param)
+            elif name.startswith("shared_encoder."):
+                param_groups.setdefault("fixed", []).append(param)
+            else:
+                param_groups.setdefault("retrained", []).append(param)
         return param_groups
 
     def get_grouped_INR_params(self):
@@ -434,7 +435,7 @@ if __name__ == '__main__':
     img_rgb, img_thermal = torch.randn(1, 3, 384, 384), torch.randn(1, 3, 384, 384)
     img_rgb = img_rgb.cuda()
     img_thermal = img_thermal.cuda()
-    model = CMMFSwin().cuda()
+    model = CMMFConvNext().cuda()
     input = {"image1.0": img_rgb, "thermal": img_thermal}
     model.test_forward(input)
     print('a')

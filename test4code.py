@@ -100,23 +100,28 @@ class FinalPatchExpand_X4(nn.Module):
 #     print(name)
  # features_only=True
 x = torch.randn(1, 3, 384, 384)
-encoder1 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=False, in_chans=3, features_only=True)
-a = encoder1(x)
-encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.stages[0])
-encoder_shared_level2 = nn.Sequential(encoder1.stages[1])
-encoder_rgb_private_level3 = encoder1.stages[2]
-encoder_rgb_private_level4 = encoder1.stages[3]
-feats = []
-feats.append(encoder_shared_level1(x))
-feats.append(encoder_shared_level2(feats[-1]))
-feats.append(encoder_rgb_private_level3(feats[-1]))
-feats.append(encoder_rgb_private_level4(feats[-1]))
-feats.reverse()
+encoder1 = timm.create_model(model_name="resnet50", pretrained=True, in_chans=3, features_only=True)
+                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\resnet152\\model.safetensors'))
 
-up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=128)
-output = nn.Conv2d(in_channels=128, out_channels=1, kernel_size=1, bias=False)
-x = up(rearrange(feats[-1], 'b h w c->b (h w) c'))
-x = rearrange(x, 'b (h w) c -> b c h w', h=384, w=384)
-x = output(x)
-x
+t = encoder1(x)
+t
+# encoder1 = timm.create_model(model_name="convnextv2_base.fcmae_ft_in22k_in1k_384", pretrained=False, in_chans=3, features_only=True)
+# a = encoder1(x)
+# encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.stages[0])
+# encoder_shared_level2 = nn.Sequential(encoder1.stages[1])
+# encoder_rgb_private_level3 = encoder1.stages[2]
+# encoder_rgb_private_level4 = encoder1.stages[3]
+# feats = []
+# feats.append(encoder_shared_level1(x))
+# feats.append(encoder_shared_level2(feats[-1]))
+# feats.append(encoder_rgb_private_level3(feats[-1]))
+# feats.append(encoder_rgb_private_level4(feats[-1]))
+# feats.reverse()
+#
+# up = FinalPatchExpand_X4(input_resolution=(96, 96), dim_scale=4, dim=128)
+# output = nn.Conv2d(in_channels=128, out_channels=1, kernel_size=1, bias=False)
+# x = up(rearrange(feats[-1], 'b h w c->b (h w) c'))
+# x = rearrange(x, 'b (h w) c -> b c h w', h=384, w=384)
+# x = output(x)
+# x
 

@@ -308,21 +308,21 @@ def cal_ual(seg_logits, seg_gts):
 
 
 @MODELS.register()
-class CMMFSwin(BasicModelClass):
+class CMMFSwinUnet(BasicModelClass):
     def __init__(self):
         super().__init__()
         self.INR_train = False
         dim = 128
         input_shape = 96
-        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
-                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
+        encoder1 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\swin_base\\model.safetensors'))
         self.encoder_shared_level1 = nn.Sequential(encoder1.patch_embed, encoder1.layers[0])
         self.encoder_shared_level2 = nn.Sequential(encoder1.layers[1])
         self.encoder_rgb_private_level3 = encoder1.layers[2]
         self.encoder_rgb_private_level4 = encoder1.layers[3]
-        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
-                                     # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
-        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=False, in_chans=3)
+        encoder2 = timm.create_model(model_name="swin_base_patch4_window12_384", pretrained=True, in_chans=3,
+                                     pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\swin_base\\model.safetensors'))
+
         # pretrained_cfg_overlay=dict(file='D:\\Yang\\model_pretrain\\model.safetensors'))
         self.encoder_thermal_private_level3 = encoder2.layers[2]
         self.encoder_thermal_private_level4 = encoder2.layers[3]

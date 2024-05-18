@@ -161,36 +161,6 @@ def save_weight(tensor_data, time):
     with open(output_file_path, 'a') as file:
         file.write(time + '\n' + data_string)
 
-class DynamicFusion(nn.Module):
-    def __init__(self,
-                 inp_chanel,
-                 feature_levels=5,
-                 ):
-        super(DynamicFusion, self).__init__()
-        self.feature_levels = feature_levels
-        self.loss_Func = nn.L1Loss()
-        for i in range(feature_levels):
-            setattr(self, f'fusion_stage{i}', DetailNode(inp_chanel, 1))
-            setattr(self, f'INR{i}', INR(2).cuda())
-
-    def forward(self, rgb_feature_list, thermal_feature_list, INR_training=False):
-        fused_list = []
-        loss_NR = 0
-        for i in range(self.feature_levels):
-            xr = rgb_feature_list[i]
-            xt = thermal_feature_list[i]
-            gate = getattr(self, f'fusion_stage{i}')
-            dynamic = (gate(xr, xt))
-            # INR_Trans = getattr(self, f'INR{i}')
-            # dynamic_NR = INR_Trans(dynamic)
-            # if INR_training:
-                # loss_NR += self.loss_Func(dynamic, dynamic_NR)
-            dynamic_NR = dynamic.chunk(2, dim=1)
-            dynamic_xr = (torch.abs(dynamic_NR[0]) + 1e-30) / (torch.abs(dynamic_NR[0]) + torch.abs(dynamic_NR[1]) + 1e-30)
-            dynamic_xt = (torch.abs(dynamic_NR[1]) + 1e-30) / (torch.abs(dynamic_NR[0]) + torch.abs(dynamic_NR[1]) + 1e-30)
-            fused = xr * dynamic_xr + xt * dynamic_xt
-            fused_list.append(fused)
-        return fused_list, loss_NR
 
     def get_grouped_params(self):
         param_groups = {}
@@ -300,7 +270,7 @@ class ZoomNet(BasicModelClass):
         self.merge_layers = nn.ModuleList([SIU(in_dim=in_c) for in_c in (64, 64, 64, 64, 64)])
 
         # self.fusion_layer = nn.ModuleList([TRFusion(in_dim=in_c) for in_c in (64, 64, 64, 64, 64)])
-        self.fusion_layer = DynamicFusion(64, 5)
+        # self.fusion_layer = DynamicFusion(64, 5)
 
         self.d5 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
         self.d4 = nn.Sequential(HMU(64, num_groups=6, hidden_dim=32))
